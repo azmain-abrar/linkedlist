@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Linked List Visualizer</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + Babel from a CDN (internet needed once; no Vite, no npm) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+
+  <script type="text/babel">
+const { useState, useRef, useEffect } = React;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const MAX = 10;
+// pretend memory address of a node (scattered, stable per node)
+const addr = (id) => 1000 + ((id * 37) % 89) * 4;
+
+// C++ code shown beside the animation; `line` in each step highlights one row
+const CODE = {
+  insertHead: ["Node* n = new Node(val);", "n->next = head;", "head = n;"],
+  insertTail: [
+    "Node* n = new Node(val);",
+    "if (!head) { head = n; return; }",
+    "Node* cur = head;",
+    "while (cur->next) cur = cur->next;",
+    "cur->next = n;",
+  ],
+  insertAt: [
+    "Node* n = new Node(val);",
+    "Node* cur = head;",
+    "for (i = 0; i < pos - 1; i++) cur = cur->next;",
+    "n->next = cur->next;",
+    "cur->next = n;",
+  ],
+  deleteHead: ["Node* t = head;", "head = head->next;", "delete t;"],
+  deleteTail: [
+    "if (!head->next) { delete head; head = NULL; return; }",
+    "Node* cur = head;",
+    "while (cur->next->next) cur = cur->next;",
+    "delete cur->next;",
+    "cur->next = NULL;",
+  ],
+  deleteAt: [
+    "Node* cur = head;",
+    "for (i = 0; i < pos - 1; i++) cur = cur->next;",
+    "Node* t = cur->next;",
+    "cur->next = t->next;",
+    "delete t;",
+  ],
+  search: [
+    "Node* cur = head;",
+    "while (cur) {",
+    "  if (cur->data == key) return cur;",
+    "  cur = cur->next;",
+    "}",
+    "return NULL;",
+  ],
+  reverse: [
+    "Node *prev = NULL, *cur = head, *next;",
+    "while (cur) {",
+    "  next = cur->next;",
+    "  cur->next = prev;",
+    "  prev = cur; cur = next;",
+    "}",
+    "head = prev;",
+  ],
+  deleteValue: [
+    "Node *cur = head, *prev = NULL;",
+    "while (cur && cur->data != key) { prev = cur; cur = cur->next; }",
+    "if (!cur) return;  // not found",
+    "if (prev) prev->next = cur->next; else head = cur->next;",
+    "delete cur;",
+  ],
+  update: ["Node* cur = head;", "for (i = 0; i < pos; i++) cur = cur->next;", "cur->data = newVal;"],
+  middle: [
+    "Node *slow = head, *fast = head;",
+    "while (fast && fast->next) {",
+    "  slow = slow->next; fast = fast->next->next;",
+    "}",
+    "return slow;  // middle node",
+  ],
+  length: ["int count = 0;", "Node* cur = head;", "while (cur) { count++; cur = cur->next; }", "return count;"],
+  sort: [
+    "for (Node* i = head; i; i = i->next)",
+    "  for (Node* j = head; j->next; j = j->next)",
+    "    if (j->data > j->next->data)",
+    "      swap(j->data, j->next->data);",
+  ],
+  detectCycle: [
+    "Node *slow = head, *fast = head;",
+    "while (fast && fast->next) {",
+    "  slow = slow->next; fast = fast->next->next;",
+    "  if (slow == fast) return true;  // cycle",
+    "}",
+    "return false;",
+  ],
+  nthEnd: [
+    "Node *slow = head, *fast = head;",
+    "for (i = 0; i < k; i++) fast = fast->next;",
+    "while (fast) {",
+    "  slow = slow->next; fast = fast->next;",
+    "}",
+    "return slow;  // kth node from the end",
+  ],
+};
+
+const TYPES = {
+  singly: {
+    title: "Singly",
+    info: "class Node {\npublic:\n  int data;\n  Node* next;\n  Node(int d) { data = d; next = NULL; }\n};\nOne pointer per node. The last next is NULL. You can only walk forward.",
+  },
+  doubly: {
+    title: "Doubly",
+    info: "class Node {\npublic:\n  int data;\n  Node *prev, *next;\n  Node(int d) { data = d; prev = next = NULL; }\n};\nEvery insert and delete also fixes the prev links. head->prev and tail->next are NULL. You can walk both ways and delete a node without tracking prev.",
+  },
+  circular: {
+    title: "Circular singly",
+    info: "class Node {\npublic:\n  int data;\n  Node* next;\n  Node(int d) { data = d; next = NULL; }\n};\nThe last node's next points back to head, so there is no NULL. Loops stop at cur->next == head instead of cur == NULL.",
+  },
+  circularDoubly: {
+    title: "Circular doubly",
+    info: "class Node {\npublic:\n  int data;\n  Node *prev, *next;\n  Node(int d) { data = d; prev = next = NULL; }\n};\ntail->next is head and head->prev is tail, so both ends are one step away.",
+  },
+};
+
+const NONE = { active: -1, found: -1, done: -1, del: -1, slow: -1, fast: -1 };
+
+function LinkedListVisualizer() {
+  const [nodes, setNodes] = useState([
+    { id: 1, value: 10 },
+    { id: 2, value: 20 },
+    { id: 3, value: 30 },
+  ]);
+  const [val, setVal] = useState("");
+  const [pos, setPos] = useState("");
+  const [speed, setSpeed] = useState(700);
+  const [hi, setHi] = useState(NONE);
+  const [op, setOp] = useState("insertHead");
+  const [line, setLine] = useState(-1);
+  const [note, setNote] = useState("Pick an operation to see it run step by step.");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const nextId = useRef(100);
+  const [type, setType] = useState("singly");
+  const [theme, setTheme] = useState(() =>
+    window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"
+  );
+  const [accent, setAccent] = useState("indigo");
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.accent = accent;
+  }, [theme, accent]);
+  const [header, setHeader] = useState(false);
+  const [cycleTo, setCycleTo] = useState(-1);
+  const n = nodes.length;
+  const isDouble = type === "doubly" || type === "circularDoubly";
+  const isCirc = type === "circular" || type === "circularDoubly";
+  const END = isCirc ? (header ? "header again" : "head again") : "NULL";
+  const cyc = cycleTo >= 0 && cycleTo < n ? cycleTo : -1;
+
+  const play = async (name, steps) => {
+    setError("");
+    setBusy(true);
+    setOp(name);
+    for (const s of steps) {
+      setLine(s.line ?? -1);
+      setHi({ ...NONE, ...s.hi });
+      setNote(s.note);
+      s.run?.();
+      await sleep(speed);
+    }
+    setHi(NONE);
+    setLine(-1);
+    setBusy(false);
+  };
+
+  const readValue = () => {
+    if (val.trim() === "" || isNaN(Number(val))) {
+      setError("Enter a number in the value box.");
+      return null;
+    }
+    if (n >= MAX) {
+      setError(`This demo holds up to ${MAX} nodes.`);
+      return null;
+    }
+    return { id: nextId.current++, value: Number(val) };
+  };
+
+  const readPos = (max) => {
+    const p = Number(pos);
+    if (pos.trim() === "" || !Number.isInteger(p) || p < 0 || p > max) {
+      setError(`Position must be a whole number from 0 to ${max}.`);
+      return null;
+    }
+    return p;
+  };
+
+  const insertHead = () => {
+    const node = readValue();
+    if (!node) return;
+    play("insertHead", [
+      { line: 0, note: `Create a new node holding ${node.value}.` },
+      { line: 1, note: "The new node's next points to the current head.", hi: { active: 0 } },
+      { line: 2, note: "head now points to the new node.", run: () => setNodes([node, ...nodes]), hi: { active: 0 } },
+    ]);
+  };
+
+  const insertTail = () => {
+    const node = readValue();
+    if (!node) return;
+    const steps = [{ line: 0, note: `Create a new node holding ${node.value}.` }];
+    if (n === 0) {
+      steps.push({ line: 1, note: "The list is empty, so the new node becomes head.", run: () => setNodes([node]) });
+    } else {
+      steps.push({ line: 2, note: "Start at head.", hi: { active: 0 } });
+      nodes.forEach((x, i) =>
+        steps.push({
+          line: 3,
+          hi: { active: i },
+          note: i < n - 1 ? `${x.value} has a next node, so move on.` : `${x.value} is the last node (next is ${isCirc ? "head" : "NULL"}).`,
+        })
+      );
+      steps.push({ line: 4, note: "Link the last node to the new node.", hi: { active: n - 1 }, run: () => setNodes([...nodes, node]) });
+    }
+    play("insertTail", steps);
+  };
+
+  const insertAt = () => {
+    const node = readValue();
+    if (!node) return;
+    const p = readPos(n);
+    if (p === null) return;
+    if (p === 0) return insertHead();
+    const steps = [
+      { line: 0, note: `Create a new node holding ${node.value}.` },
+      { line: 1, note: "Start at head.", hi: { active: 0 } },
+    ];
+    for (let i = 0; i < p; i++)
+      steps.push({ line: 2, hi: { active: i }, note: i === p - 1 ? `Stop at index ${i}, the node just before position ${p}.` : `At index ${i}, keep moving.` });
+    steps.push({ line: 3, hi: { active: p - 1 }, note: "The new node points to what cur pointed to." });
+    steps.push({ line: 4, hi: { active: p - 1 }, note: `cur now points to the new node at position ${p}.`, run: () => setNodes([...nodes.slice(0, p), node, ...nodes.slice(p)]) });
+    play("insertAt", steps);
+  };
+
+  const deleteHead = () => {
+    if (n === 0) return setError("The list is empty.");
+    play("deleteHead", [
+      { line: 0, note: "Keep a pointer t to the head node.", hi: { del: 0 } },
+      { line: 1, note: "Move head to the second node.", hi: { del: 0 } },
+      { line: 2, note: "Free the old head.", hi: { del: 0 }, run: () => setNodes(nodes.slice(1)) },
+    ]);
+  };
+
+  const deleteTail = () => {
+    if (n === 0) return setError("The list is empty.");
+    if (n === 1)
+      return play("deleteTail", [{ line: 0, note: "Only one node: delete it and set head to NULL.", hi: { del: 0 }, run: () => setNodes([]) }]);
+    const steps = [{ line: 1, note: "Start at head.", hi: { active: 0 } }];
+    for (let i = 0; i < n - 1; i++)
+      steps.push({ line: 2, hi: { active: i }, note: i < n - 2 ? `${nodes[i].value}'s next-next is not NULL, move on.` : `${nodes[i].value} is the second-last node.` });
+    steps.push({ line: 3, hi: { active: n - 2, del: n - 1 }, note: "Delete the last node.", run: () => setNodes(nodes.slice(0, -1)) });
+    steps.push({ line: 4, hi: { active: n - 2 }, note: "Set the new last node's next to NULL." });
+    play("deleteTail", steps);
+  };
+
+  const deleteAt = () => {
+    if (n === 0) return setError("The list is empty.");
+    const p = readPos(n - 1);
+    if (p === null) return;
+    if (p === 0) return deleteHead();
+    const steps = [{ line: 0, note: "Start at head.", hi: { active: 0 } }];
+    for (let i = 0; i < p; i++)
+      steps.push({ line: 1, hi: { active: i }, note: i === p - 1 ? `Stop at index ${i}, just before the node to delete.` : `At index ${i}, keep moving.` });
+    steps.push({ line: 2, hi: { active: p - 1, del: p }, note: `t points to the node at position ${p}.` });
+    steps.push({ line: 3, hi: { active: p - 1, del: p }, note: "Skip over t by linking cur to t's next." });
+    steps.push({ line: 4, hi: { active: p - 1, del: p }, note: "Free t.", run: () => setNodes([...nodes.slice(0, p), ...nodes.slice(p + 1)]) });
+    play("deleteAt", steps);
+  };
+
+  const search = () => {
+    if (val.trim() === "" || isNaN(Number(val))) return setError("Enter the value to search for.");
+    if (cyc >= 0) return setError("The list has a cycle, so a search would never reach NULL. Break the cycle first.");
+    const key = Number(val);
+    const steps = [{ line: 0, note: "Start at head.", hi: { active: 0 } }];
+    for (let i = 0; i < n; i++) {
+      steps.push({ line: 2, hi: { active: i }, note: `Is ${nodes[i].value} equal to ${key}?` });
+      if (nodes[i].value === key) {
+        steps.push({ line: 2, hi: { found: i }, note: `Found ${key} at index ${i} after ${i + 1} comparison${i ? "s" : ""}.` });
+        return play("search", steps);
+      }
+      steps.push({ line: 3, hi: { active: i }, note: "No match, move to the next node." });
+    }
+    steps.push({ line: 5, note: `Reached ${END} after ${n} comparisons. ${key} is not in the list.` });
+    play("search", steps);
+  };
+
+  const traverse = () => {
+    if (n === 0) return setError("The list is empty.");
+    if (cyc >= 0) return setError("The list has a cycle, so traversal would never end. Break the cycle first.");
+    play("search", [
+      { line: 0, note: "Start at head.", hi: { active: 0 } },
+      ...nodes.map((x, i) => ({ line: 3, hi: { active: i }, note: `Visit ${x.value}, then follow next.` })),
+      { line: 5, note: `Reached ${END}. Traversal done.` },
+    ]);
+  };
+
+  const reverse = () => {
+    if (n < 2) return setError("Add at least two nodes to reverse.");
+    const steps = [{ line: 0, note: "prev = NULL, cur = head." }];
+    nodes.forEach((x, i) => {
+      steps.push({ line: 2, hi: { active: i, done: i }, note: `Save ${x.value}'s next before changing it.` });
+      steps.push({ line: 3, hi: { active: i, done: i }, note: `${x.value}'s next now points backward to ${i ? nodes[i - 1].value : "NULL"}.` });
+      steps.push({ line: 4, hi: { active: i, done: i + 1 }, note: "Move prev and cur one step forward." });
+    });
+    steps.push({ line: 6, hi: {}, note: "head now points to the old tail.", run: () => setNodes([...nodes].reverse()) });
+    play("reverse", steps);
+  };
+
+  const deleteValue = () => {
+    if (n === 0) return setError("The list is empty.");
+    if (val.trim() === "" || isNaN(Number(val))) return setError("Enter the value to delete.");
+    const key = Number(val);
+    const idx = nodes.findIndex((x) => x.value === key);
+    const steps = [{ line: 0, note: "Start at head.", hi: { active: 0 } }];
+    const upto = idx === -1 ? n : idx + 1;
+    for (let i = 0; i < upto; i++)
+      steps.push({ line: 1, hi: { active: i }, note: `Is ${nodes[i].value} equal to ${key}?` });
+    if (idx === -1) steps.push({ line: 2, note: `${key} is not in the list. Nothing deleted.` });
+    else {
+      steps.push({ line: 3, hi: { del: idx }, note: `Found ${key} at index ${idx}. Link the previous node to its next.` });
+      steps.push({ line: 4, hi: { del: idx }, note: "Free the node.", run: () => setNodes(nodes.filter((_, i) => i !== idx)) });
+    }
+    play("deleteValue", steps);
+  };
+
+  const updateAt = () => {
+    if (n === 0) return setError("The list is empty.");
+    if (val.trim() === "" || isNaN(Number(val))) return setError("Enter the new value.");
+    const p = readPos(n - 1);
+    if (p === null) return;
+    const steps = [{ line: 0, note: "Start at head.", hi: { active: 0 } }];
+    for (let i = 0; i <= p; i++)
+      steps.push({ line: 1, hi: { active: i }, note: i === p ? `Reached index ${p}.` : `At index ${i}, keep moving.` });
+    steps.push({ line: 2, hi: { found: p }, note: `Set data to ${val}.`, run: () => setNodes(nodes.map((x, i) => (i === p ? { ...x, value: Number(val) } : x))) });
+    play("update", steps);
+  };
+
+  const middle = () => {
+    if (n === 0) return setError("The list is empty.");
+    const steps = [{ line: 0, note: "slow and fast both start at head.", hi: { slow: 0, fast: 0 } }];
+    let s = 0, f = 0;
+    while (f + 1 < n) {
+      s += 1;
+      f += 2;
+      steps.push({ line: 2, hi: { slow: s, fast: f < n ? f : -1 }, note: `slow moves to index ${s}. fast jumps to ${f < n ? `index ${f}` : "the end"}.` });
+    }
+    steps.push({ line: 4, hi: { found: s }, note: `fast reached the end, so the middle node is ${nodes[s].value} at index ${s}.` });
+    play("middle", steps);
+  };
+
+  const count = () => {
+    if (n === 0) return setNote("Length is 0 because head is NULL.");
+    if (cyc >= 0) return setError("The list has a cycle, so counting would never end. Break the cycle first.");
+    play("length", [
+      { line: 0, note: "count starts at 0." },
+      ...nodes.map((x, i) => ({ line: 2, hi: { active: i }, note: `Visit ${x.value}. count = ${i + 1}.` })),
+      { line: 3, note: `Length is ${n}.` },
+    ]);
+  };
+
+  const sortList = () => {
+    if (n < 2) return setError("Add at least two nodes to sort.");
+    const a = [...nodes];
+    const steps = [];
+    for (let i = 0; i < n - 1; i++) {
+      let swapped = false;
+      for (let j = 0; j < n - 1 - i; j++) {
+        steps.push({ line: 2, hi: { active: j }, note: `Compare ${a[j].value} and ${a[j + 1].value}.` });
+        if (a[j].value > a[j + 1].value) {
+          [a[j], a[j + 1]] = [a[j + 1], a[j]];
+          swapped = true;
+          const snap = [...a];
+          steps.push({ line: 3, hi: { active: j + 1 }, note: `${snap[j + 1].value} is larger, so swap the two.`, run: () => setNodes(snap) });
+        }
+      }
+      if (!swapped) break;
+    }
+    steps.push({ note: "Sorted in ascending order." });
+    play("sort", steps);
+  };
+
+  const randomize = () => {
+    setNodes(Array.from({ length: 5 }, () => ({ id: nextId.current++, value: Math.floor(Math.random() * 90) + 10 })));
+    setNote("Generated 5 random nodes.");
+    setCycleTo(-1);
+    setError("");
+  };
+
+  const nextOf = (i) => (i === n - 1 ? cyc : i + 1);
+
+  const detectCycle = () => {
+    if (n === 0) return setError("The list is empty.");
+    const steps = [{ line: 0, note: "slow and fast both start at head.", hi: { slow: 0, fast: 0 } }];
+    let sl = 0, fa = 0, guard = 0;
+    while (guard++ < 60) {
+      if (fa === -1 || nextOf(fa) === -1) {
+        steps.push({ line: 5, hi: { slow: sl }, note: "fast reached NULL, so there is no cycle." });
+        break;
+      }
+      sl = nextOf(sl);
+      fa = nextOf(nextOf(fa));
+      steps.push({ line: 2, hi: { slow: sl, fast: fa }, note: `slow moves 1 step to index ${sl}. fast moves 2 steps${fa === -1 ? " and hits NULL" : ` to index ${fa}`}.` });
+      if (sl === fa) {
+        steps.push({ line: 3, hi: { slow: sl, fast: fa }, note: `slow and fast meet at index ${sl}, so the list has a cycle.` });
+        break;
+      }
+    }
+    play("detectCycle", steps);
+  };
+
+  const nthEnd = () => {
+    if (n === 0) return setError("The list is empty.");
+    const k = Number(pos);
+    if (!Number.isInteger(k) || k < 1 || k > n) return setError(`Type k (1 to ${n}) in the position box.`);
+    const steps = [{ line: 0, note: "slow and fast both start at head.", hi: { slow: 0, fast: 0 } }];
+    for (let i = 1; i <= k; i++)
+      steps.push({ line: 1, hi: { slow: 0, fast: i < n ? i : -1 }, note: `fast moves ${i} step${i > 1 ? "s" : ""} ahead of slow.` });
+    let sl = 0, fa = k;
+    while (fa < n) {
+      sl++;
+      fa++;
+      steps.push({ line: 3, hi: { slow: sl, fast: fa < n ? fa : -1 }, note: "Move both one step. The gap stays k." });
+    }
+    steps.push({ line: 5, hi: { found: sl }, note: `fast is NULL, so slow is the ${k}th node from the end: ${nodes[sl].value}.` });
+    play("nthEnd", steps);
+  };
+
+  const linkCycle = () => {
+    if (n < 2) return setError("Add at least two nodes first.");
+    const p = readPos(n - 1);
+    if (p === null) return;
+    setCycleTo(p);
+    setNote(`The tail's next now points to index ${p}. Try Detect cycle.`);
+  };
+
+  const rowHi = (i) => [hi.active, hi.slow, hi.fast, hi.found, hi.del].includes(i);
+
+  const boxStyle = (i) => {
+    if (hi.del === i) return "tone-del";
+    if (hi.slow === i && hi.fast === i) return "tone-ok";
+    if (hi.fast === i) return "tone-fast";
+    if (hi.slow === i) return "tone-active";
+    if (hi.found === i) return "tone-ok";
+    if (hi.active === i) return "tone-active";
+    if (i < hi.done) return "tone-done";
+    return "tone-idle";
+  };
+
+  const btn = "btn";
+  const input = "input";
+
+  return (
+    <section className="ll-root">
+      <header className="ll-top">
+        <div>
+          <h1 className="ll-title">{TYPES[type].title} linked list</h1>
+          <p className="ll-sub">
+            Each node stores data and a pointer to the next node. head marks the first node{isCirc ? ", and the last node points back to the start." : ", and the last node points to NULL."}
+          </p>
+        </div>
+        <div className="ll-theme" role="group" aria-label="Appearance">
+          <button className="ll-toggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+            {theme === "dark" ? "☀ Light" : "☾ Dark"}
+          </button>
+          {["indigo", "emerald", "rose", "amber"].map((a) => (
+            <button key={a} data-c={a} aria-label={a + " accent"} aria-pressed={accent === a}
+              className={`ll-swatch ${accent === a ? "is-on" : ""}`} onClick={() => setAccent(a)} />
+          ))}
+        </div>
+      </header>
+
+      <div className="ll-tabs" role="tablist" aria-label="List type">
+        {Object.entries(TYPES).map(([k, t]) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={type === k}
+            disabled={busy}
+            onClick={() => { setType(k); setNote(`${t.title} linked list selected.`); }}
+            className={`btn ${type === k ? "is-active" : ""}`}
+          >
+            {t.title}
+          </button>
+        ))}
+        <label className="ll-check">
+          <input type="checkbox" checked={header} disabled={busy} onChange={(e) => setHeader(e.target.checked)} />
+          Header node
+        </label>
+      </div>
+
+      {/* Visualization */}
+      <div className="ll-stage">
+        {n === 0 ? (
+          <p className="ll-muted">head → NULL. The list is empty. Insert a node to start.</p>
+        ) : (
+          <div className="ll-row">
+            {isDouble && (
+              <span className="ll-badge ll-badge-start">
+                {isCirc ? "tail ↪" : "NULL ◂"}
+              </span>
+            )}
+            {header && (
+              <div className="ll-node-wrap ll-header-wrap">
+                <div className="ll-tags c-violet">header</div>
+                <div className="ll-node ll-node-header">
+                  <div className="ll-data ll-data-sm">n = {n}</div>
+                  <div className="ll-ptr ll-ptr-next">•</div>
+                </div>
+                <div className="ll-arrow">
+                  <span className="ll-arrow-line" />
+                  <span className="ll-arrow-head">▸</span>
+                </div>
+              </div>
+            )}
+              {nodes.map((x, i) => (
+                <div key={x.id} className="ll-node-wrap ll-enter">
+                  <div className="ll-tags c-amber">
+                    {i === 0 && <span>head</span>}
+                    {i === n - 1 && <span className="c-sky">tail</span>}
+                    {hi.slow === i && <span className="c-amber">slow</span>}
+                    {hi.fast === i && <span className="c-violet">fast</span>}
+                  </div>
+                  <div className={`ll-node ${boxStyle(i)}`}>
+                    {isDouble && <div className="ll-ptr ll-ptr-prev">•</div>}
+                    <div className="ll-data">{x.value}</div>
+                    <div className="ll-ptr ll-ptr-next">•</div>
+                  </div>
+                  <div className="ll-index">[{i}]</div>
+                  <div className="ll-arrow">
+                    {isDouble && <span className="ll-arrow-head ll-arrow-back">◂</span>}
+                    <span className="ll-arrow-line" />
+                    <span className="ll-arrow-head">▸</span>
+                  </div>
+                </div>
+              ))}
+            <span className="ll-badge">{cyc >= 0 ? `↩ [${cyc}]` : isCirc ? (header ? "↩ header" : "↩ head") : "NULL"}</span>
+          </div>
+        )}
+      </div>
+
+      <p aria-live="polite" className="ll-note">
+        {note}
+      </p>
+      {error && <p role="alert" className="ll-error">{error}</p>}
+
+      {/* Controls */}
+      <div className="ll-grid">
+        <div className="ll-stack">
+          <div className="ll-inputs">
+            <label className="ll-label">
+              Value <input className={input} value={val} onChange={(e) => setVal(e.target.value)} inputMode="numeric" placeholder="e.g. 42" />
+            </label>
+            <label className="ll-label">
+              Position <input className={input} value={pos} onChange={(e) => setPos(e.target.value)} inputMode="numeric" placeholder="index or k" />
+            </label>
+            <p className="ll-hint">Value is used by insert, search, delete value and update. Position is used by the position operations and Nth from end.</p>
+          </div>
+          <div className="ll-groups">
+            <div className="ll-group g-insert">
+              <h3 className="ll-gh">Insert</h3>
+              <div className="ll-actions">
+                <button className={btn} disabled={busy} onClick={insertHead}>Insert head</button>
+                <button className={btn} disabled={busy} onClick={insertTail}>Insert tail</button>
+                <button className={btn} disabled={busy} onClick={insertAt}>Insert at position</button>
+              </div>
+            </div>
+            <div className="ll-group g-delete">
+              <h3 className="ll-gh">Delete</h3>
+              <div className="ll-actions">
+                <button className={btn} disabled={busy} onClick={deleteHead}>Delete head</button>
+                <button className={btn} disabled={busy} onClick={deleteTail}>Delete tail</button>
+                <button className={btn} disabled={busy} onClick={deleteAt}>Delete at position</button>
+                <button className={btn} disabled={busy} onClick={deleteValue}>Delete value</button>
+              </div>
+            </div>
+            <div className="ll-group g-find">
+              <h3 className="ll-gh">Search and inspect</h3>
+              <div className="ll-actions">
+                <button className={btn} disabled={busy} onClick={search}>Search value</button>
+                <button className={btn} disabled={busy} onClick={traverse}>Traverse</button>
+                <button className={btn} disabled={busy} onClick={updateAt}>Update at position</button>
+                <button className={btn} disabled={busy} onClick={count}>Length</button>
+              </div>
+            </div>
+            <div className="ll-group g-org">
+              <h3 className="ll-gh">Reorganize</h3>
+              <div className="ll-actions">
+                <button className={btn} disabled={busy} onClick={reverse}>Reverse</button>
+                <button className={btn} disabled={busy} onClick={sortList}>Sort</button>
+                <button className={btn} disabled={busy} onClick={randomize}>Random list</button>
+                <button className={btn} disabled={busy} onClick={() => { setNodes([]); setCycleTo(-1); setNote("List cleared."); }}>Clear</button>
+              </div>
+            </div>
+            <div className="ll-group g-ptr">
+              <h3 className="ll-gh">Slow and fast pointer</h3>
+              <div className="ll-actions">
+                <button className={btn} disabled={busy} onClick={middle}>Find middle</button>
+                <button className={btn} disabled={busy} onClick={nthEnd}>Nth from end</button>
+                <button className={btn} disabled={busy} onClick={detectCycle}>Detect cycle</button>
+                <button className={btn} disabled={busy} onClick={linkCycle}>Link tail to position</button>
+                <button className={btn} disabled={busy} onClick={() => { setCycleTo(-1); setNote("Cycle removed. The tail points to NULL again."); }}>Break cycle</button>
+              </div>
+            </div>
+          </div>
+          <label className="ll-speed">
+            Speed
+            <input type="range" min="200" max="1500" step="100" value={1700 - speed} disabled={busy} onChange={(e) => setSpeed(1700 - Number(e.target.value))} />
+            <span>{speed} ms per step</span>
+          </label>
+          <ul className="ll-legend">
+            <li style={{ "--c": "var(--amber)" }}>cur / slow</li>
+            <li style={{ "--c": "var(--violet)" }}>fast</li>
+            <li style={{ "--c": "var(--emerald)" }}>match</li>
+            <li style={{ "--c": "var(--rose)" }}>deleting</li>
+            <li style={{ "--c": "var(--indigo)" }}>reversed</li>
+          </ul>
+        </div>
+
+        {/* Code panel */}
+        <div className="ll-stack ll-stack-sm">
+        <pre className="ll-code">
+          {CODE[op].map((l, i) => (
+            <div key={i} className={`ll-code-line ${line === i ? "is-on" : ""}`}>
+              {l}
+            </div>
+          ))}
+        </pre>
+        <p className="ll-info">{TYPES[type].info}
+          {header ? "\n\nHeader node: a special first node that holds the node count and points to the real first node, so inserting at the front never changes the header pointer. Grounded header list: the last next is NULL. Circular header list: the last next points back to the header." : ""}
+        </p>
+        </div>
+      </div>
+
+      <div className="ll-grid ll-bottom">
+        <div className="ll-card ll-scroll">
+          <h3 className="ll-h3">Representation in memory</h3>
+          <p className="ll-hint">
+            Nodes sit at scattered addresses. Only the links keep them in order, and START holds the address of the first node.
+          </p>
+          <table className="ll-table">
+            <thead className="c-muted">
+              <tr>
+                <th className="ll-th">Address</th>
+                <th className="ll-th">INFO</th>
+                {isDouble && <th className="ll-th">PREV</th>}
+                <th className="ll-th ll-th-last">LINK</th>
+              </tr>
+            </thead>
+            <tbody>
+              {header && (
+                <tr className="c-violet">
+                  <td className="ll-td">988</td>
+                  <td className="ll-td">n = {n}</td>
+                  {isDouble && <td className="ll-td">NULL</td>}
+                  <td>{n ? addr(nodes[0].id) : "NULL"}</td>
+                </tr>
+              )}
+              {nodes
+                .map((x, i) => ({ x, i }))
+                .sort((a, b) => addr(a.x.id) - addr(b.x.id))
+                .map(({ x, i }) => (
+                  <tr key={x.id} className={rowHi(i) ? "is-hot" : ""}>
+                    <td className="ll-td">{addr(x.id)}</td>
+                    <td className="ll-td">{x.value}</td>
+                    {isDouble && (
+                      <td className="ll-td">{i ? addr(nodes[i - 1].id) : isCirc ? addr(nodes[n - 1].id) : header ? 988 : "NULL"}</td>
+                    )}
+                    <td>
+                      {i < n - 1 ? addr(nodes[i + 1].id) : cyc >= 0 ? addr(nodes[cyc].id) : isCirc ? (header ? 988 : addr(nodes[0].id)) : "NULL"}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+          <p className="ll-hint ll-hint-light">
+            START = {header ? 988 : n ? addr(nodes[0].id) : "NULL"}
+            {n === 0 && " (empty list)"}
+          </p>
+        </div>
+
+        <div className="ll-stack ll-stack-sm">
+          <div className="ll-card">
+            <h3 className="ll-h3">Pointer basics</h3>
+            <pre className="ll-pre">
+{`head        = ${n ? addr(nodes[0].id) : "NULL"}   // address of the first node
+head->data  = ${n ? nodes[0].value : "-"}
+head->next  = ${n > 1 ? addr(nodes[1].id) : "NULL"}${isDouble ? `\nhead->prev  = ${isCirc && n ? addr(nodes[n - 1].id) : "NULL"}` : ""}
+tail->next  = ${n ? (cyc >= 0 ? addr(nodes[cyc].id) : isCirc ? addr(nodes[0].id) : "NULL") : "-"}`}
+            </pre>
+            <p className="ll-hint">
+              {'A pointer stores an address. p->next means "go to the address in p, then read its next field".'}
+            </p>
+          </div>
+          <details className="ll-card">
+            <summary className="ll-summary">ADT: LinkedList</summary>
+            <pre className="ll-pre">
+{`class LinkedList {
+  Node* head;  int size;
+public:
+  LinkedList();                 // create empty list
+  bool isEmpty();
+  int  length();
+  void insertFirst(int x);  void insertLast(int x);  void insertAt(int pos, int x);
+  void deleteFirst();       void deleteLast();       void deleteAt(int pos);
+  Node* search(int key);    void traverse();         void reverse();
+  Node* middle();           // slow-fast pointer
+  bool hasCycle();          // slow-fast pointer
+};`}
+            </pre>
+          </details>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(<LinkedListVisualizer />);
+  </script>
+</body>
+</html>
