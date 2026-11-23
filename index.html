@@ -111,6 +111,25 @@ const CODE = {
   ],
 };
 
+// Time (worst case) and extra space for each operation
+const COMPLEXITY = {
+  insertHead: { time: "O(1)", space: "O(1)" },
+  insertTail: { time: "O(n)", space: "O(1)" },
+  insertAt: { time: "O(n)", space: "O(1)" },
+  deleteHead: { time: "O(1)", space: "O(1)" },
+  deleteTail: { time: "O(n)", space: "O(1)" },
+  deleteAt: { time: "O(n)", space: "O(1)" },
+  search: { time: "O(n)", space: "O(1)" },
+  reverse: { time: "O(n)", space: "O(1)" },
+  deleteValue: { time: "O(n)", space: "O(1)" },
+  update: { time: "O(n)", space: "O(1)" },
+  middle: { time: "O(n)", space: "O(1)" },
+  length: { time: "O(n)", space: "O(1)" },
+  sort: { time: "O(n²)", space: "O(1)" },
+  detectCycle: { time: "O(n)", space: "O(1)" },
+  nthEnd: { time: "O(n)", space: "O(1)" },
+};
+
 const TYPES = {
   singly: {
     title: "Singly",
@@ -642,6 +661,10 @@ function LinkedListVisualizer() {
             </div>
           ))}
         </pre>
+        <div className="ll-cx">
+          <div className="ll-cx-item"><span>Time (worst case)</span><b>{COMPLEXITY[op].time}</b></div>
+          <div className="ll-cx-item"><span>Space</span><b>{COMPLEXITY[op].space}</b></div>
+        </div>
         <p className="ll-info">{TYPES[type].info}
           {header ? "\n\nHeader node: a special first node that holds the node count and points to the real first node, so inserting at the front never changes the header pointer. Grounded header list: the last next is NULL. Circular header list: the last next points back to the header." : ""}
         </p>
